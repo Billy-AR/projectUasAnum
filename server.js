@@ -12,8 +12,16 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 
+const corsOptions = process.env.FRONTEND_URL
+  ? {
+      origin: "http://localhost:5173", // Ganti dengan domain asal frontend
+      methods: ["GET", "POST", "PUT", "DELETE"],
+      // Jika kamu pakai cookie atau auth header
+    }
+  : null;
+
 // Middleware
-app.use(cors());
+app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.static(path.resolve(__dirname, "./public")));
 
@@ -26,8 +34,11 @@ const historicalData = [
   { tahun: 2023, mobil: 3836691, motor: 18229176 },
 ];
 
-// Fungsi untuk regresi linear
-function linearRegression(xData, yData) {
+// Fungsi untuk regresi linear menggunakan tahun ke-n
+function linearRegression(yData) {
+  // Buat array tahun ke-n (1, 2, 3, 4, 5) sebagai x
+  const xData = Array.from({ length: yData.length }, (_, i) => i + 1);
+
   const n = xData.length;
   let sumX = 0,
     sumY = 0,
@@ -44,12 +55,14 @@ function linearRegression(xData, yData) {
   const slope = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX);
   const intercept = (sumY - slope * sumX) / n;
 
-  return { slope, intercept };
+  return { slope, intercept, xData };
 }
 
 // Fungsi prediksi
-function predictValue(x, slope, intercept) {
-  return slope * x + intercept;
+function predictValue(year, startYear, slope, intercept) {
+  // Konversi tahun menjadi tahun ke-n
+  const yearIndex = year - startYear + 1;
+  return slope * yearIndex + intercept;
 }
 
 // API Routes
@@ -65,15 +78,20 @@ app.post("/api/predict", (req, res) => {
   }
 
   try {
-    const years = historicalData.map((item) => item.tahun);
+    const startYear = historicalData[0].tahun; // 2019
     const mobilData = historicalData.map((item) => item.mobil);
     const motorData = historicalData.map((item) => item.motor);
 
-    const mobilRegression = linearRegression(years, mobilData);
-    const predictionMobil = predictValue(year, mobilRegression.slope, mobilRegression.intercept);
+    const mobilRegression = linearRegression(mobilData);
+    const predictionMobil = predictValue(year, startYear, mobilRegression.slope, mobilRegression.intercept);
 
-    const motorRegression = linearRegression(years, motorData);
-    const predictionMotor = predictValue(year, motorRegression.slope, motorRegression.intercept);
+    const motorRegression = linearRegression(motorData);
+    const predictionMotor = predictValue(year, startYear, motorRegression.slope, motorRegression.intercept);
+
+    // Buat persamaan yang lebih informatif (menggunakan tahun ke-n)
+    const yearIndex = year - startYear + 1;
+    const mobilEquation = `y = ${mobilRegression.slope.toFixed(2)} × (tahun ke-${yearIndex}) + ${mobilRegression.intercept.toFixed(2)}`;
+    const motorEquation = `y = ${motorRegression.slope.toFixed(2)} × (tahun ke-${yearIndex}) + ${motorRegression.intercept.toFixed(2)}`;
 
     const result = {
       year: year,
@@ -84,12 +102,12 @@ app.post("/api/predict", (req, res) => {
         mobil: {
           slope: mobilRegression.slope,
           intercept: mobilRegression.intercept,
-          equation: `y = ${mobilRegression.slope.toFixed(2)}x + ${mobilRegression.intercept.toFixed(2)}`,
+          equation: mobilEquation,
         },
         motor: {
           slope: motorRegression.slope,
           intercept: motorRegression.intercept,
-          equation: `y = ${motorRegression.slope.toFixed(2)}x + ${motorRegression.intercept.toFixed(2)}`,
+          equation: motorEquation,
         },
       },
     };
