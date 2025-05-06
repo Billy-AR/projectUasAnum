@@ -12,13 +12,13 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 
-const corsOptions = process.env.FRONTEND_URL
-  ? {
-      origin: "http://localhost:5173", // Ganti dengan domain asal frontend
-      methods: ["GET", "POST", "PUT", "DELETE"],
-      // Jika kamu pakai cookie atau auth header
-    }
-  : null;
+// Improved CORS configuration for both development and production
+const corsOptions = {
+  // Allow requests from all origins in development, or from specific domains in production
+  origin: process.env.FRONTEND_URL || "*",
+  methods: ["GET", "POST", "PUT", "DELETE"],
+  credentials: true,
+};
 
 // Middleware
 app.use(cors(corsOptions));
@@ -119,6 +119,12 @@ app.post("/api/predict", (req, res) => {
   }
 });
 
+// Logging middleware to debug API calls
+app.use((req, res, next) => {
+  console.log(`${req.method} ${req.url}`);
+  next();
+});
+
 // Serve React App
 app.get("*", (req, res) => {
   res.sendFile(path.resolve(__dirname, "./public", "index.html"));
@@ -140,7 +146,9 @@ const port = process.env.PORT || 5000;
 const start = async () => {
   try {
     app.listen(port, () => {
-      console.log(`Server listening on ${port}...`);
+      console.log(`Server listening on port ${port}...`);
+      console.log(`Environment: ${process.env.NODE_ENV || "development"}`);
+      console.log(`CORS origin: ${corsOptions.origin}`);
     });
   } catch (error) {
     console.log(error);
