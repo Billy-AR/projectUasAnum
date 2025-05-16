@@ -23,39 +23,17 @@ app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.static(path.resolve(__dirname, "./public")));
 
-// Data manual (fallback)
-const manualHistoricalData = [
-  { tahun: 2019, mobil: 3310426, motor: 15868191 },
-  { tahun: 2020, mobil: 3365467, motor: 16141380 },
-  { tahun: 2021, mobil: 3544492, motor: 16711638 },
-  { tahun: 2022, mobil: 3772850, motor: 17347866 },
-  { tahun: 2023, mobil: 3836691, motor: 18229176 },
-];
-
 // Initialize data sources on startup
 async function initializeDataSources() {
   try {
     // Create default data sources if they don't exist
     await prisma.dataSource.upsert({
-      where: { name: "manual" },
-      update: {},
-      create: { name: "manual", isActive: true },
-    });
-
-    await prisma.dataSource.upsert({
       where: { name: "database" },
       update: {},
-      create: { name: "database", isActive: false },
+      create: { name: "database", isActive: true },
     });
 
-    // Seed historical data if database is empty
-    const count = await prisma.historicalData.count();
-    if (count === 0) {
-      await prisma.historicalData.createMany({
-        data: manualHistoricalData,
-      });
-      console.log("Database seeded with historical data");
-    }
+    // No manual data source anymore, we only use database
   } catch (error) {
     console.error("Error initializing data sources:", error);
   }
@@ -68,25 +46,20 @@ app.get("/api/historical-data", async (req, res) => {
       where: { isActive: true },
     });
 
-    let data;
     if (activeSource?.name === "database") {
-      data = await prisma.historicalData.findMany({
+      const data = await prisma.historicalData.findMany({
         orderBy: { tahun: "asc" },
       });
+      return res.json({
+        data,
+        source: activeSource.name,
+      });
     } else {
-      data = manualHistoricalData;
+      return res.status(400).json({ error: "Data source is not set to database" });
     }
-
-    res.json({
-      data,
-      source: activeSource?.name || "manual",
-    });
   } catch (error) {
     console.error("Error fetching historical data:", error);
-    res.json({
-      data: manualHistoricalData,
-      source: "manual",
-    });
+    res.status(500).json({ error: "Error fetching data from database" });
   }
 });
 
@@ -126,7 +99,6 @@ app.post("/api/historical-data", async (req, res) => {
   try {
     const { tahun, mobil, motor } = req.body;
 
-    // Check if data for this year already exists
     const existingData = await prisma.historicalData.findUnique({
       where: { tahun },
     });
@@ -213,7 +185,6 @@ app.post("/api/predict", async (req, res) => {
   }
 
   try {
-    // Get current data source
     const activeSource = await prisma.dataSource.findFirst({
       where: { isActive: true },
     });
@@ -224,7 +195,7 @@ app.post("/api/predict", async (req, res) => {
         orderBy: { tahun: "asc" },
       });
     } else {
-      historicalData = manualHistoricalData;
+      return res.status(400).json({ error: "Data source is not set to database" });
     }
 
     if (historicalData.length === 0) {
