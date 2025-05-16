@@ -1,0 +1,29 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model HistoricalData {
+  id        String   @id @default(cuid())
+  tahun     Int      @unique
+  mobil     Int
+  motor     Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("historical_data")
+}
+
+model DataSource {
+  id         String   @id @default(cuid())
+  name       String   @unique
+  isActive   Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@map("data_sources")
+}

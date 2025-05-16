@@ -1,32 +1,30 @@
-// backend/server.js
 import path from "path";
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import { fileURLToPath } from "url";
+import { PrismaClient } from "@prisma/client";
 
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const prisma = new PrismaClient();
 
 const app = express();
 
-// Improved CORS configuration for both development and production
 const corsOptions = {
-  // Allow requests from all origins in development, or from specific domains in production
   origin: process.env.FRONTEND_URL || "*",
   methods: ["GET", "POST", "PUT", "DELETE"],
   credentials: true,
 };
 
-// Middleware
 app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.static(path.resolve(__dirname, "./public")));
 
-// Data kendaraan
-const historicalData = [
+// Data manual (fallback)
+const manualHistoricalData = [
   { tahun: 2019, mobil: 3310426, motor: 15868191 },
   { tahun: 2020, mobil: 3365467, motor: 16141380 },
   { tahun: 2021, mobil: 3544492, motor: 16711638 },
@@ -34,11 +32,155 @@ const historicalData = [
   { tahun: 2023, mobil: 3836691, motor: 18229176 },
 ];
 
-// Fungsi untuk regresi linear menggunakan tahun ke-n
-function linearRegression(yData) {
-  // Buat array tahun ke-n (1, 2, 3, 4, 5) sebagai x
-  const xData = Array.from({ length: yData.length }, (_, i) => i + 1);
+// Initialize data sources on startup
+async function initializeDataSources() {
+  try {
+    // Create default data sources if they don't exist
+    await prisma.dataSource.upsert({
+      where: { name: "manual" },
+      update: {},
+      create: { name: "manual", isActive: true },
+    });
 
+    await prisma.dataSource.upsert({
+      where: { name: "database" },
+      update: {},
+      create: { name: "database", isActive: false },
+    });
+
+    // Seed historical data if database is empty
+    const count = await prisma.historicalData.count();
+    if (count === 0) {
+      await prisma.historicalData.createMany({
+        data: manualHistoricalData,
+      });
+      console.log("Database seeded with historical data");
+    }
+  } catch (error) {
+    console.error("Error initializing data sources:", error);
+  }
+}
+
+// API Routes
+app.get("/api/historical-data", async (req, res) => {
+  try {
+    const activeSource = await prisma.dataSource.findFirst({
+      where: { isActive: true },
+    });
+
+    let data;
+    if (activeSource?.name === "database") {
+      data = await prisma.historicalData.findMany({
+        orderBy: { tahun: "asc" },
+      });
+    } else {
+      data = manualHistoricalData;
+    }
+
+    res.json({
+      data,
+      source: activeSource?.name || "manual",
+    });
+  } catch (error) {
+    console.error("Error fetching historical data:", error);
+    res.json({
+      data: manualHistoricalData,
+      source: "manual",
+    });
+  }
+});
+
+app.get("/api/data-sources", async (req, res) => {
+  try {
+    const sources = await prisma.dataSource.findMany();
+    res.json(sources);
+  } catch (error) {
+    console.error("Error fetching data sources:", error);
+    res.status(500).json({ error: "Failed to fetch data sources" });
+  }
+});
+
+app.post("/api/switch-data-source", async (req, res) => {
+  const { sourceName } = req.body;
+
+  try {
+    // Deactivate all sources
+    await prisma.dataSource.updateMany({
+      data: { isActive: false },
+    });
+
+    // Activate selected source
+    await prisma.dataSource.update({
+      where: { name: sourceName },
+      data: { isActive: true },
+    });
+
+    res.json({ success: true, activeSource: sourceName });
+  } catch (error) {
+    console.error("Error switching data source:", error);
+    res.status(500).json({ error: "Failed to switch data source" });
+  }
+});
+
+app.post("/api/historical-data", async (req, res) => {
+  try {
+    const { tahun, mobil, motor } = req.body;
+
+    // Check if data for this year already exists
+    const existingData = await prisma.historicalData.findUnique({
+      where: { tahun },
+    });
+
+    if (existingData) {
+      return res.status(400).json({ error: `Data untuk tahun ${tahun} sudah ada` });
+    }
+
+    const newData = await prisma.historicalData.create({
+      data: { tahun, mobil, motor },
+    });
+
+    res.json(newData);
+  } catch (error) {
+    console.error("Error creating historical data:", error);
+    res.status(500).json({ error: "Failed to create historical data" });
+  }
+});
+
+app.delete("/api/historical-data/:tahun", async (req, res) => {
+  try {
+    const tahun = parseInt(req.params.tahun);
+
+    await prisma.historicalData.delete({
+      where: { tahun },
+    });
+
+    res.json({ success: true, message: `Data tahun ${tahun} berhasil dihapus` });
+  } catch (error) {
+    console.error("Error deleting historical data:", error);
+    res.status(500).json({ error: "Failed to delete historical data" });
+  }
+});
+
+app.put("/api/historical-data/:tahun", async (req, res) => {
+  try {
+    const tahun = parseInt(req.params.tahun);
+    const { mobil, motor } = req.body;
+
+    const updatedData = await prisma.historicalData.update({
+      where: { tahun },
+      data: { mobil, motor },
+    });
+
+    res.json(updatedData);
+  } catch (error) {
+    console.error("Error updating historical data:", error);
+    res.status(500).json({ error: "Failed to update historical data" });
+  }
+});
+
+// Linear regression functions
+function linearRegression(yData) {
+  const xData = Array.from({ length: yData.length }, (_, i) => i + 1);
   const n = xData.length;
   let sumX = 0,
     sumY = 0,
@@ -58,19 +200,12 @@ function linearRegression(yData) {
   return { slope, intercept, xData };
 }
 
-// Fungsi prediksi
 function predictValue(year, startYear, slope, intercept) {
-  // Konversi tahun menjadi tahun ke-n
   const yearIndex = year - startYear + 1;
   return slope * yearIndex + intercept;
 }
 
-// API Routes
-app.get("/api/historical-data", (req, res) => {
-  res.json(historicalData);
-});
-
-app.post("/api/predict", (req, res) => {
+app.post("/api/predict", async (req, res) => {
   const { year } = req.body;
 
   if (!year) {
@@ -78,7 +213,25 @@ app.post("/api/predict", (req, res) => {
   }
 
   try {
-    const startYear = historicalData[0].tahun; // 2019
+    // Get current data source
+    const activeSource = await prisma.dataSource.findFirst({
+      where: { isActive: true },
+    });
+
+    let historicalData;
+    if (activeSource?.name === "database") {
+      historicalData = await prisma.historicalData.findMany({
+        orderBy: { tahun: "asc" },
+      });
+    } else {
+      historicalData = manualHistoricalData;
+    }
+
+    if (historicalData.length === 0) {
+      return res.status(400).json({ error: "No historical data available" });
+    }
+
+    const startYear = historicalData[0].tahun;
     const mobilData = historicalData.map((item) => item.mobil);
     const motorData = historicalData.map((item) => item.motor);
 
@@ -88,7 +241,6 @@ app.post("/api/predict", (req, res) => {
     const motorRegression = linearRegression(motorData);
     const predictionMotor = predictValue(year, startYear, motorRegression.slope, motorRegression.intercept);
 
-    // Buat persamaan yang lebih informatif (menggunakan tahun ke-n)
     const yearIndex = year - startYear + 1;
     const mobilEquation = `y = ${mobilRegression.slope.toFixed(2)} × (tahun ke-${yearIndex}) + ${mobilRegression.intercept.toFixed(2)}`;
     const motorEquation = `y = ${motorRegression.slope.toFixed(2)} × (tahun ke-${yearIndex}) + ${motorRegression.intercept.toFixed(2)}`;
@@ -98,6 +250,7 @@ app.post("/api/predict", (req, res) => {
       mobil: Math.round(predictionMobil),
       motor: Math.round(predictionMotor),
       total: Math.round(predictionMobil + predictionMotor),
+      source: activeSource?.name || "manual",
       details: {
         mobil: {
           slope: mobilRegression.slope,
@@ -119,23 +272,14 @@ app.post("/api/predict", (req, res) => {
   }
 });
 
-// Logging middleware to debug API calls
-app.use((req, res, next) => {
-  console.log(`${req.method} ${req.url}`);
-  next();
-});
-
-// Serve React App
 app.get("*", (req, res) => {
   res.sendFile(path.resolve(__dirname, "./public", "index.html"));
 });
 
-// 404 handler
 app.use("*", (req, res) => {
   res.status(404).json({ msg: "Not Found" });
 });
 
-// Error handling middleware
 app.use((err, req, res, next) => {
   console.error(err.stack);
   res.status(500).json({ error: "Something went wrong!" });
@@ -145,10 +289,10 @@ const port = process.env.PORT || 5000;
 
 const start = async () => {
   try {
+    await initializeDataSources();
     app.listen(port, () => {
       console.log(`Server listening on port ${port}...`);
       console.log(`Environment: ${process.env.NODE_ENV || "development"}`);
-      console.log(`CORS origin: ${corsOptions.origin}`);
     });
   } catch (error) {
     console.log(error);
@@ -157,3 +301,8 @@ const start = async () => {
 };
 
 start();
+
+// Cleanup on process termination
+process.on("beforeExit", async () => {
+  await prisma.$disconnect();
+});
